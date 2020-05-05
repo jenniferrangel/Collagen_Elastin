@@ -38,18 +38,10 @@ void System::solve_forces() {
 	thrust::fill(nodeInfoVecs.node_force_x.begin(),nodeInfoVecs.node_force_x.end(),0);
 	thrust::fill(nodeInfoVecs.node_force_y.begin(),nodeInfoVecs.node_force_y.end(),0);
 	thrust::fill(nodeInfoVecs.node_force_z.begin(),nodeInfoVecs.node_force_z.end(),0);
-		
+	
 	if (generalParams.linking == true) {
 		link_nodes(nodeInfoVecs, edgeInfoVecs, auxVecs, generalParams);
 	}
-
-	//apply external force.
-	//only counts external force on network nodes since force has been reset.
-/*	external_force(
-		nodeInfoVecs,
-		generalParams,
-		extensionParams,
-		domainParams);*/
 		
 	calc_bending_spring_force(nodeInfoVecs, bendInfoVecs, generalParams);
 	  
@@ -69,7 +61,6 @@ void System::solve_forces() {
 				nodeInfoVecs.node_force_y.begin(),
 				nodeInfoVecs.node_force_z.begin())) + generalParams.max_node_count,
 			functor_norm(), 0.0, thrust::plus<double>() );
-
 			thrust::transform(
 				thrust::make_zip_iterator(
 					thrust::make_tuple(
@@ -84,27 +75,27 @@ void System::solve_forces() {
 				nodeInfoVecs.sum_forces_on_node.begin(),//save vector
 				functor_norm());
 	
-			extensionParams.applied_force_upper =   thrust::transform_reduce(
-														thrust::make_zip_iterator(
-															thrust::make_tuple(
-																nodeInfoVecs.node_upper_selection_pull.begin(),
-																nodeInfoVecs.sum_forces_on_node.begin())),
-														thrust::make_zip_iterator(
-															thrust::make_tuple(
-																nodeInfoVecs.node_upper_selection_pull.begin(),
-																nodeInfoVecs.sum_forces_on_node.begin())) + generalParams.max_node_count,
-														functor_sum_pulled_forces(), 0.0, thrust::plus<double>());
-			
-			extensionParams.applied_force_lower =   thrust::transform_reduce(
-														thrust::make_zip_iterator(
-															thrust::make_tuple(
-																nodeInfoVecs.node_lower_selection_pull.begin(),
-																nodeInfoVecs.sum_forces_on_node.begin())),
-															thrust::make_zip_iterator(
-																thrust::make_tuple(
-																	nodeInfoVecs.node_lower_selection_pull.begin(),
-																	nodeInfoVecs.sum_forces_on_node.begin())) + generalParams.max_node_count,
-														functor_sum_pulled_forces(), 0.0, thrust::plus<double>());
+	extensionParams.applied_force_upper = thrust::transform_reduce(
+												thrust::make_zip_iterator(
+													thrust::make_tuple(
+														nodeInfoVecs.node_upper_selection_pull.begin(),
+														nodeInfoVecs.sum_forces_on_node.begin())),
+												thrust::make_zip_iterator(
+													thrust::make_tuple(
+														nodeInfoVecs.node_upper_selection_pull.begin(),
+														nodeInfoVecs.sum_forces_on_node.begin())) + generalParams.max_node_count,
+												functor_sum_pulled_forces(), 0.0, thrust::plus<double>());
+	
+	extensionParams.applied_force_lower = thrust::transform_reduce(
+												thrust::make_zip_iterator(
+													thrust::make_tuple(
+														nodeInfoVecs.node_lower_selection_pull.begin(),
+														nodeInfoVecs.sum_forces_on_node.begin())),
+													thrust::make_zip_iterator(
+														thrust::make_tuple(
+															nodeInfoVecs.node_lower_selection_pull.begin(),
+															nodeInfoVecs.sum_forces_on_node.begin())) + generalParams.max_node_count,
+												functor_sum_pulled_forces(), 0.0, thrust::plus<double>());
 };
 
 
@@ -115,6 +106,10 @@ void System::solve_system() {
 	std::cout << " setting initial bucket scheme "  << std::endl;
 	std::cout<<"magnitudeForce at beginning of simulation: "<< generalParams.magnitudeForce<<std::endl;
 
+	//set initial epsilon
+	generalParams.epsilon = (generalParams.epsilon_factor) *
+		sqrt(6.0 * edgeInfoVecs.kB * edgeInfoVecs.temperature * generalParams.dt / edgeInfoVecs.viscosity_elastin);
+	std::cout<< "Initial Epsilon: " << generalParams.epsilon << std::endl;
 	//initialize images
 	storage->print_VTK_file();
 	storage->save_params();
@@ -124,18 +119,16 @@ void System::solve_system() {
 		nodeInfoVecs,
 		generalParams,
 		extensionParams,
-		domainParams);
-
+		domainParams);//set initial step and strain parameters
+	std::cout<<"starting system" << std::flush;
 	while (runIters == true) {
 
 		generalParams.iterationCounter++;
 		generalParams.currentTime += generalParams.dt;
 		//if (generalParams.iterationCounter % 50 == 0){
 			//std::cout << "current iter: " <<generalParams.iterationCounter<<  std::endl;
-		
-			set_bucket_scheme();
+		set_bucket_scheme();
 		//}
-
 		advance_positions(
 			nodeInfoVecs,
 			generalParams,
@@ -148,8 +141,12 @@ void System::solve_system() {
 		thrust::device_vector<double>::iterator iter = thrust::max_element(nodeInfoVecs.node_vel.begin(), nodeInfoVecs.node_vel.end());
 		unsigned position = iter - nodeInfoVecs.node_vel.begin();
 		double max_val = *iter;
+		
+		thrust::device_vector<double>::iterator iterx = thrust::max_element(nodeInfoVecs.node_loc_x.begin(), nodeInfoVecs.node_loc_x.end());
+		double max_x = *iterx;
+		std::cout<<"max x: " << max_x << std::endl;
 
-		if ((generalParams.iterationCounter % 100) == 0) {
+		if ((generalParams.iterationCounter % 1000) == 0) {
 			double currentStrain = (extensionParams.averageUpperStrain - extensionParams.averageLowerStrain) /
 			(extensionParams.originAverageUpperStrain - extensionParams.originAverageLowerStrain ) - 1.0;
 			if (currentStrain>4.0){
@@ -179,14 +176,10 @@ void System::solve_system() {
 				generalParams,
 				extensionParams,
 				domainParams);
-			generalParams.epsilon = (2.0) *
-				sqrt(6.0 * edgeInfoVecs.kB * edgeInfoVecs.temperature * generalParams.dt / edgeInfoVecs.viscosity_elastin);
 
 			std::cout<<"Maximum vel: "<< maxVel <<std::endl;
-			std::cout<<"updating epsilon back to original: "<< generalParams.epsilon<<std::endl;
 			generalParams.magnitudeForce += generalParams.df;
-			std::cout<<"magnitudeForce: "<< generalParams.magnitudeForce<<std::endl;
-
+			
 		}
 		///////////////////////////////////////////////////////////////////////////////
 		//EQUILIBRIUM END
